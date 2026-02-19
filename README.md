@@ -84,6 +84,87 @@ Verifies the signed message and logs the user in.
 - **Body**: `{ "message": "raw-siwn-message", "signature": "hex", "publicKey": "hex" }`
 - **Returns**: A Supabase User object and Session (including `access_token` and `refresh_token`).
 
+## 🌐 Frontend Integration
+
+To integrate this flow into your frontend, follow these simplified steps using the [NeoLine N3 API](https://tutorial.neoline.io/reference/neo3-provider-api).
+
+### 1. Get User Address
+```javascript
+const account = await neoline.getAccount();
+const address = account.address;
+```
+
+### 2. Fetch Nonce
+```javascript
+const { nonce } = await fetch(`${edgeUrl}/auth/nonce?address=${address}`).then(res => res.json());
+```
+
+### 3. Sign SIWN Message
+Construct the structured message and sign it using NeoLine:
+```javascript
+const domain = window.location.host;
+const statement = 'Sign in with your Neo wallet.';
+const issuedAt = new Date().toISOString();
+
+const message = `${domain} wants you to sign in with your Neo account:
+${address}
+
+${statement}
+
+URI: ${window.location.origin}
+Version: 1
+Chain ID: 3
+Nonce: ${nonce}
+Issued At: ${issuedAt}`;
+
+const signed = await neoline.signMessageWithoutSaltV2({ message });
+// signed contains { data: "signature-hex", publicKey: "compressed-pubkey-hex" }
+```
+
+### 4. Authenticate & Set Session
+```javascript
+const { session } = await fetch(`${edgeUrl}/auth/login`, {
+  method: 'POST',
+  body: JSON.stringify({
+    message,
+    signature: signed.data,
+    publicKey: signed.publicKey
+  })
+}).then(res => res.json());
+
+// Finalize Supabase session
+const { error } = await supabase.auth.setSession({
+  access_token: session.access_token,
+  refresh_token: session.refresh_token
+});
+```
+
+## ⚙️ How it Works
+
+The backend follows a strict verification pipeline to ensure the authenticity of the Neo wallet holder.
+
+### 1. Challenge Generation (`/nonce`)
+- Generates a cryptographically secure `UUID` (nonce).
+- Stores the nonce in the `private.auth_nonces` table, mapped to the user's Neo address.
+- Sets a short expiration time (5 minutes) to prevent long-term replay attacks.
+
+### 2. Verification Pipeline (`/login`)
+When a user submits their signed message, the Edge Function performs the following checks:
+
+1.  **Domain Validation**: Compares the `domain` inside the SIWN message against your `ALLOWED_DOMAINS` env variable.
+2.  **Public Key Matching**: Derives the Neo address from the provided `publicKey` and ensures it matches the `address` claimed in the SIWN message.
+3.  **Signature Verification**: 
+    - Reconstructs the raw message string.
+    - Applies `n3MessageFormat` (mimicking a Neo N3 transaction wrapper).
+    - Verifies the signature using the user's public key.
+4.  **Nonce Consumption**: Deletes the matching nonce from `private.auth_nonces`. If the nonce was already used or doesn't exist, the login fails.
+
+### 3. Session Management
+Once verified, the backend handles Supabase Auth:
+- **Deterministic Identity**: Uses `WALLET_AUTH_SECRET` + the Neo address to generate a consistent, secure password.
+- **Auto-Provisioning**: If the user doesn't exist, it uses `auth.admin.createUser` to create a new Supabase Auth account.
+- **Login**: Calls `signInWithPassword` with the derived credentials and returns the JWT session to the frontend.
+
 ## 🛡 Security Notes
 
 - **Deterministic Passwords**: This kit uses `WALLET_AUTH_SECRET` + the Neo address to create a deterministic password for Supabase Auth. Since only your server knows the secret, the password cannot be reverse-engineered by users.
