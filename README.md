@@ -11,78 +11,31 @@ A premium starter kit for building decentralized applications with **Supabase** 
 - **Private Schema Migration**: Securely manages nonces and wallet mappings in a `private` database schema.
 - **Configurable Security**: Domain validation via `ALLOWED_DOMAINS` to prevent unauthorized usage.
 
-## 📁 Project Structure
+## ⚙️ How it Works
 
-```text
-.
-├── supabase/
-│   ├── functions/
-│   │   └── auth/               # Deno Edge Function for SIWN
-│   │       ├── lib/            # Auth logic (SIWN, Crypto, Utils)
-│   │       ├── deno.json       # Deno configuration & dependencies
-│   │       └── index.ts        # Main entry point for the auth API
-│   └── migrations/             # Database schema migrations
-```
+The backend follows a strict verification pipeline to ensure the authenticity of the Neo wallet holder.
 
-## 🛠 Prerequisites
+### 1. Challenge Generation (`/nonce`)
+- Generates a cryptographically secure `UUID` (nonce).
+- Stores the nonce in the `private.auth_nonces` table, mapped to the user's Neo address.
+- Sets a short expiration time (5 minutes) to prevent long-term replay attacks.
 
-- [Supabase CLI](https://supabase.com/docs/guides/cli)
-- [Docker](https://www.docker.com/) (required for running Supabase locally)
-- A Neo N3 wallet (e.g., [NeoLine](https://neoline.io/))
+### 2. Verification Pipeline (`/login`)
+When a user submits their signed message, the Edge Function performs the following checks:
 
-## ⚙️ Setup Instructions
+1.  **Domain Validation**: Compares the `domain` inside the SIWN message against your `ALLOWED_DOMAINS` env variable.
+2.  **Public Key Matching**: Derives the Neo address from the provided `publicKey` and ensures it matches the `address` claimed in the SIWN message.
+3.  **Signature Verification**: 
+    - Reconstructs the raw message string.
+    - Applies `n3MessageFormat` (mimicking a Neo N3 transaction wrapper).
+    - Verifies the signature using the user's public key.
+4.  **Nonce Consumption**: Deletes the matching nonce from `private.auth_nonces`. If the nonce was already used or doesn't exist, the login fails.
 
-### 1. Initialize Supabase
-If you haven't already, install the Supabase CLI and link your project:
-```bash
-supabase init
-```
-
-### 2. Configure Environment Variables
-Create a `.env` file in the root directory and fill in the values:
-```bash
-# Create .env file
-touch .env
-```
-- `ALLOWED_DOMAINS`: Comma-separated list of domains allowed to use the auth flow (e.g., `localhost:*,*.myapp.com`).
-- `WALLET_AUTH_SECRET`: A long, random string used to deterministically generate passwords for wallet-based accounts. **Keep this secret!**
-
-### 3. Deploy Migrations
-Apply the database schema to your local or remote Supabase instance:
-```bash
-supabase db push
-# OR for local development
-supabase start
-```
-
-### 4. Set Secrets in Supabase
-When deploying to production, ensure your secrets are set in the Supabase vault:
-```bash
-supabase secrets set ALLOWED_DOMAINS="your-domain.com"
-supabase secrets set WALLET_AUTH_SECRET="your-very-long-secret"
-```
-
-## 🖥 Local Development
-
-Start the Supabase backend and the auth Edge Function:
-
-```bash
-supabase start
-supabase functions serve auth --no-verify-jwt --env-file .env
-```
-
-Your auth API will be available at `http://localhost:54321/functions/v1/auth`.
-
-## 📡 API Reference
-
-### `GET /nonce?address=<neo-address>`
-Generates a unique, ephemeral challenge nonce for a specific Neo address.
-- **Returns**: `{ "nonce": "uuid" }`
-
-### `POST /login`
-Verifies the signed message and logs the user in.
-- **Body**: `{ "message": "raw-siwn-message", "signature": "hex", "publicKey": "hex" }`
-- **Returns**: A Supabase User object and Session (including `access_token` and `refresh_token`).
+### 3. Session Management
+Once verified, the backend handles Supabase Auth:
+- **Deterministic Identity**: Uses `WALLET_AUTH_SECRET` + the Neo address to generate a consistent, secure password.
+- **Auto-Provisioning**: If the user doesn't exist, it uses `auth.admin.createUser` to create a new Supabase Auth account.
+- **Login**: Calls `signInWithPassword` with the derived credentials and returns the JWT session to the frontend.
 
 ## 🌐 Frontend Integration
 
@@ -139,31 +92,76 @@ const { error } = await supabase.auth.setSession({
 });
 ```
 
-## ⚙️ How it Works
+## 📁 Project Structure
 
-The backend follows a strict verification pipeline to ensure the authenticity of the Neo wallet holder.
+```text
+.
+├── supabase/
+│   ├── functions/
+│   │   └── auth/               # Deno Edge Function for SIWN
+│   │       ├── lib/            # Auth logic (SIWN, Crypto, Utils)
+│   │       ├── deno.json       # Deno configuration & dependencies
+│   │       └── index.ts        # Main entry point for the auth API
+│   └── migrations/             # Database schema migrations
+```
 
-### 1. Challenge Generation (`/nonce`)
-- Generates a cryptographically secure `UUID` (nonce).
-- Stores the nonce in the `private.auth_nonces` table, mapped to the user's Neo address.
-- Sets a short expiration time (5 minutes) to prevent long-term replay attacks.
+## 🛠 Prerequisites
 
-### 2. Verification Pipeline (`/login`)
-When a user submits their signed message, the Edge Function performs the following checks:
+- [Supabase CLI](https://supabase.com/docs/guides/cli)
+- [Docker](https://www.docker.com/) (required for running Supabase locally)
+- A Neo N3 wallet (e.g., [NeoLine](https://neoline.io/))
 
-1.  **Domain Validation**: Compares the `domain` inside the SIWN message against your `ALLOWED_DOMAINS` env variable.
-2.  **Public Key Matching**: Derives the Neo address from the provided `publicKey` and ensures it matches the `address` claimed in the SIWN message.
-3.  **Signature Verification**: 
-    - Reconstructs the raw message string.
-    - Applies `n3MessageFormat` (mimicking a Neo N3 transaction wrapper).
-    - Verifies the signature using the user's public key.
-4.  **Nonce Consumption**: Deletes the matching nonce from `private.auth_nonces`. If the nonce was already used or doesn't exist, the login fails.
+## ⚙️ Setup Instructions
 
-### 3. Session Management
-Once verified, the backend handles Supabase Auth:
-- **Deterministic Identity**: Uses `WALLET_AUTH_SECRET` + the Neo address to generate a consistent, secure password.
-- **Auto-Provisioning**: If the user doesn't exist, it uses `auth.admin.createUser` to create a new Supabase Auth account.
-- **Login**: Calls `signInWithPassword` with the derived credentials and returns the JWT session to the frontend.
+### 1. Initialize Supabase
+If you haven't already, install the Supabase CLI and link your project:
+```bash
+supabase init
+```
+
+### 2. Configure Environment Variables
+Create a `.env` file in the root directory and fill in the values:
+```bash
+# Create .env file
+touch .env
+```
+- `ALLOWED_DOMAINS`: Comma-separated list of domains allowed to use the auth flow (e.g., `localhost:*,*.myapp.com`).
+- `WALLET_AUTH_SECRET`: A long, random string used to deterministically generate passwords for wallet-based accounts. **Keep this secret!**
+
+### 3. Deploy Migrations
+Apply the database schema to your local or remote Supabase instance:
+```bash
+supabase db reset
+```
+
+### 4. Set Secrets in Supabase
+When deploying to production, ensure your secrets are set in the Supabase vault:
+```bash
+supabase secrets set ALLOWED_DOMAINS="your-domain.com"
+supabase secrets set WALLET_AUTH_SECRET="your-very-long-secret"
+```
+
+## 🖥 Local Development
+
+Start the Supabase backend and the auth Edge Function:
+
+```bash
+supabase start
+supabase functions serve auth --no-verify-jwt --env-file .env
+```
+
+Your auth API will be available at `http://localhost:54321/functions/v1/auth`.
+
+## 📡 API Reference
+
+### `GET /nonce?address=<neo-address>`
+Generates a unique, ephemeral challenge nonce for a specific Neo address.
+- **Returns**: `{ "nonce": "uuid" }`
+
+### `POST /login`
+Verifies the signed message and logs the user in.
+- **Body**: `{ "message": "raw-siwn-message", "signature": "hex", "publicKey": "hex" }`
+- **Returns**: A Supabase User object and Session (including `access_token` and `refresh_token`).
 
 ## 🛡 Security Notes
 
